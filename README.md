@@ -2,7 +2,7 @@
 pluto - A Tor Hidden Service SMTP Relay.
 Tested with [Mini Mailer](https://github.com/Ch1ffr3punk/mmg) and [smtpdump](https://github.com/Ch1ffr3punk/smtpdump).
 
-To generate TSL certificates simply run:  
+To generate TLS certificates simply run:  
 $ openssl req -nodes -new -x509 -keyout key.pem -out cert.pem  
 
 If you like pluto, consider a small donation in crypto currency.
