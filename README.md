@@ -8,6 +8,6 @@ $ openssl req -nodes -new -x509 -keyout key.pem -out cert.pem
 If you like pluto, consider a small donation in crypto currency.
 
 Nym: n1yql04xjhmlhfkjsk8x8g7fynm27xzvnk23wfys  
-BTC: bc1qhgek8p5qcwz7r6502y8tvenkpsw9w5yafhatxk  
+BTC: 129yB8kL8mQVZufNS4huajsdJPa48aHwHz 
 XMR: 45TJx8ZHngM4GuNfYxRw7R7vRyFgfMVp862JqycMrPmyfTfJAYcQGEzT27wL1z5RG1b5XfRPJk97KeZr1svK8qES2z1uZrS  
 
