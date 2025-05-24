@@ -2,8 +2,11 @@ package main
 
 import (
 	"bytes"
-	"context"
+	"crypto/ed25519"
+	"crypto/sha512"
 	"crypto/tls"
+	"encoding/base64"
+	"encoding/pem"
 	"errors"
 	"flag"
 	"fmt"
@@ -12,34 +15,45 @@ import (
 	"net"
 	"net/smtp"
 	"net/textproto"
+	"os"
+	"path/filepath"
 	"regexp"
+	"runtime"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/awnumar/memguard"
+	"golang.org/x/crypto/chacha20poly1305"
+	"golang.org/x/crypto/curve25519"
 	"golang.org/x/net/proxy"
 )
 
 var (
-	certFile = flag.String("cert", "", "Path to TLS certificate file")
-	keyFile  = flag.String("key", "", "Path to TLS private key file")
+	certFile         = flag.String("cert", "", "Path to TLS certificate file")
+	keyFile          = flag.String("key", "", "Path to TLS private key file")
+	minicryptKeyFile = flag.String("mk", "", "Path to Minicrypt private key file")
 )
 
 var emailRegExp = regexp.MustCompile(`^<((\S+)@(\S+\.\S+))>$`)
-
-const TorSocksProxyAddr = "127.0.0.1:9050"
-const RelayWorkerCount = 5 
-const DeliveryTimeout = 30 * time.Second 
-
 var mailQueue chan *Envelope
+var mailQueueMutex sync.Mutex
+
+const (
+	TorSocksProxyAddr   = "127.0.0.1:9050"
+	RelayWorkerCount    = 5
+	DeliveryTimeout     = 30 * time.Second
+	RewriteFromAddress  = "orb@pluto.onion"
+)
 
 type Server struct {
-	Name      string
-	Addr      string
-	Handler   Handler
-	TLSConfig *tls.Config
-	Debug     bool
-	ErrorLog  *log.Logger
+	Name         string
+	Addr         string
+	Handler      Handler
+	TLSConfig    *tls.Config
+	Debug        bool
+	ErrorLog     *log.Logger
+	MinicryptKey *memguard.LockedBuffer
 }
 
 type conn struct {
@@ -57,20 +71,21 @@ type conn struct {
 	mu            sync.Mutex
 }
 
+type Envelope struct {
+	FromAgent           string
+	RemoteAddr          string
+	OriginalMessageFrom string
+	MessageFrom         string
+	MessageTo           string
+	MessageData         io.Reader
+	ReceivedAt          time.Time
+	RetryCount          int
+}
+
 type HandlerFunc func(envelope *Envelope) error
 
 func (f HandlerFunc) ServeSMTP(envelope *Envelope) error {
 	return f(envelope)
-}
-
-type Envelope struct {
-	FromAgent   string
-	RemoteAddr  string
-	MessageFrom string
-	MessageTo   string
-	MessageData io.Reader
-	ReceivedAt  time.Time
-	RetryCount  int
 }
 
 type Handler interface {
@@ -78,8 +93,9 @@ type Handler interface {
 }
 
 type ServeMux struct {
-	mu sync.RWMutex
-	m  map[string]map[string]muxEntry
+	mu     sync.RWMutex
+	m      map[string]map[string]muxEntry
+	server *Server
 }
 
 type muxEntry struct {
@@ -99,12 +115,6 @@ func (l *torListener) Accept() (net.Conn, error) {
 	return conn, nil
 }
 
-func (srv *Server) logfd(format string, args ...interface{}) {
-	if srv.Debug {
-		srv.logf(format, args...)
-	}
-}
-
 func (srv *Server) logf(format string, args ...interface{}) {
 	if srv.ErrorLog != nil {
 		srv.ErrorLog.Printf(format, args...)
@@ -113,14 +123,19 @@ func (srv *Server) logf(format string, args ...interface{}) {
 	}
 }
 
+func (srv *Server) logfd(format string, args ...interface{}) {
+	if srv.Debug {
+	}
+}
+
 func (srv *Server) newConn(rwc net.Conn) (c *conn, err error) {
-	c = new(conn)
-	c.resetSession()
-	c.remoteAddr = rwc.RemoteAddr().String()
-	c.server = srv
-	c.rwc = rwc
-	c.text = textproto.NewConn(c.rwc)
-	c.tlsState = nil
+	c = &conn{
+		remoteAddr: rwc.RemoteAddr().String(),
+		server:     srv,
+		rwc:        rwc,
+		text:       textproto.NewConn(rwc),
+		mailTo:     make([]string, 0),
+	}
 	return c, nil
 }
 
@@ -200,21 +215,18 @@ func (srv *Server) ServeTLS(l net.Listener) error {
 }
 
 func (c *conn) serve() {
-	c.server.logfd("INFO: Handling new connection from " + c.remoteAddr)
-	c.server.logfd("<%d %s %s\n", 220, c.server.Name, "ESMTP")
+	c.server.logf("INFO: Connection established from %s", c.remoteAddr)
 	err := c.text.PrintfLine("%d %s %s", 220, c.server.Name, "ESMTP")
 	if err != nil {
-		c.server.logf("%v\n", err)
+		c.server.logf("ERROR: Connection error with %s: %v", c.remoteAddr, err)
 		return
 	}
 	for !c.quitSent && err == nil {
 		err = c.readCommand()
-		if err != nil {
-			c.server.logf("%v\n", err)
-		}
 	}
 	c.text.Close()
 	c.rwc.Close()
+	c.server.logf("INFO: Connection closed from %s", c.remoteAddr)
 }
 
 func (c *conn) resetSession() {
@@ -238,19 +250,15 @@ func SplitAddress(address string) (string, string, error) {
 	if !strings.Contains(address, "@") {
 		return "", "", errors.New("invalid email address format: missing '@'")
 	}
-
 	sepInd := strings.LastIndex(address, "@")
 	if sepInd == -1 {
 		return "", "", errors.New("invalid email address format")
 	}
-
 	localPart := address[:sepInd]
 	domainPart := address[sepInd+1:]
-
 	if !isOnionDomain(domainPart) {
-		return "", "", errors.New("Only .onion domains are allowed")
+		return "", "", errors.New("only .onion domains are allowed")
 	}
-
 	return localPart, domainPart, nil
 }
 
@@ -259,202 +267,155 @@ func (c *conn) readCommand() error {
 	if err != nil {
 		return err
 	}
-	c.server.logfd(">%s\n", s)
 	parts := strings.Split(s, " ")
 	if len(parts) <= 0 {
-		c.server.logfd("<%d %s\n", 500, "Command not recognized")
 		return c.text.PrintfLine("%d %s", 500, "Command not recognized")
 	}
 	parts[0] = strings.ToUpper(parts[0])
-
 	switch parts[0] {
-	case "HELO":
+	case "HELO", "EHLO":
 		if len(parts) < 2 {
-			c.server.logfd("<%d %s\n", 501, "Not enough arguments")
 			return c.text.PrintfLine("%d %s", 501, "Not enough arguments")
 		}
 		c.fromAgent = parts[1]
 		c.resetSession()
 		c.helloRecieved = true
-		c.server.logfd("<%d %s %s\n", 250, "Hello", parts[1])
-		return c.text.PrintfLine("%d %s %s", 250, "Hello", parts[1])
-	case "EHLO":
-		if len(parts) < 2 {
-			c.server.logfd("<%d %s\n", 501, "Not enough arguments")
-			return c.text.PrintfLine("%d %s", 501, "Not enough arguments")
-		}
-		c.fromAgent = parts[1]
-		c.resetSession()
-		c.helloRecieved = true
-		c.server.logfd("<%d-%s %s\n", 250, "Greets", parts[1])
-		err := c.text.PrintfLine("%d-%s %s", 250, "Greets", parts[1])
-		if err != nil {
-			return err
+		responses := []string{
+			fmt.Sprintf("%d-%s %s", 250, "Greets", parts[1]),
+			fmt.Sprintf("%d-%s", 250, "PIPELINING"),
+			fmt.Sprintf("%d-%s", 250, "SMTPUTF8"),
 		}
 		if c.server.TLSConfig != nil && c.tlsState == nil {
-			c.server.logfd("<%d-%s\n", 250, "STARTTLS")
-			err = c.text.PrintfLine("%d-%s", 250, "STARTTLS")
-			if err != nil {
+			responses = append([]string{fmt.Sprintf("%d-%s", 250, "STARTTLS")}, responses...)
+		}
+		for i, resp := range responses {
+			if i == len(responses)-1 {
+				resp = strings.Replace(resp, "-", " ", 1)
+			}
+			if err := c.text.PrintfLine(resp); err != nil {
 				return err
 			}
 		}
-		c.server.logfd("<%d-%s\n", 250, "PIPELINING")
-		err = c.text.PrintfLine("%d-%s", 250, "PIPELINING")
-		if err != nil {
-			return err
-		}
-		c.server.logfd("<%d-%s\n", 250, "SMTPUTF8")
-		err = c.text.PrintfLine("%d-%s", 250, "SMTPUTF8")
-		if err != nil {
-			return err
-		}
-		c.server.logfd("<%d %s\n", 250, "8BITMIME")
-		return c.text.PrintfLine("%d %s", 250, "8BITMIME")
+		return nil
 	case "STARTTLS":
 		if c.server.TLSConfig == nil {
-			c.server.logfd("<%d %s\n", 454, "TLS unavailable on the server")
 			return c.text.PrintfLine("%d %s", 454, "TLS unavailable on the server")
 		}
 		if c.tlsState != nil {
-			c.server.logfd("<%d %s\n", 454, "TLS session already active")
 			return c.text.PrintfLine("%d %s", 454, "TLS session already active")
 		}
-		c.server.logfd("<%d %s\n", 220, "Ready to start TLS")
-		err = c.text.PrintfLine("%d %s", 220, "Ready to start TLS")
-		if err != nil {
+		if err := c.text.PrintfLine("%d %s", 220, "Ready to start TLS"); err != nil {
 			return err
 		}
 		tlsconn := tls.Server(c.rwc, c.server.TLSConfig)
-		err = tlsconn.Handshake()
-		if err != nil {
+		if err := tlsconn.Handshake(); err != nil {
 			return err
 		}
 		c.rwc = tlsconn
 		c.text = textproto.NewConn(c.rwc)
-		c.tlsState = new(tls.ConnectionState)
-		*c.tlsState = tlsconn.ConnectionState()
+		state := tlsconn.ConnectionState()
+		c.tlsState = &state
 		c.resetSession()
 		c.helloRecieved = false
+		return nil
 	case "MAIL":
 		if c.mailFrom != "" {
-			c.server.logfd("<%d %s\n", 503, "MAIL command already recieved")
-			return c.text.PrintfLine("%d %s", 503, "MAIL command already recieved")
+			return c.text.PrintfLine("%d %s", 503, "MAIL command already received")
 		}
 		if len(parts) < 2 {
-			c.server.logfd("<%d %s\n", 501, "Not enough arguments")
 			return c.text.PrintfLine("%d %s", 501, "Not enough arguments")
 		}
 		if !strings.HasPrefix(parts[1], "FROM:") {
-			c.server.logfd("<%d %s\n", 501, "MAIL command must be immediately succeeded by 'FROM:'")
 			return c.text.PrintfLine("%d %s", 501, "MAIL command must be immediately succeeded by 'FROM:'")
 		}
-		i := strings.Index(parts[1], ":")
-		if i < 0 || !emailRegExp.MatchString(parts[1][i+1:]) {
-			c.server.logfd("<%d %s\n", 501, "MAIL command contained invalid address")
+		from := parts[1][5:]
+		if !emailRegExp.MatchString(from) {
 			return c.text.PrintfLine("%d %s", 501, "MAIL command contained invalid address")
 		}
-		from := emailRegExp.FindStringSubmatch(parts[1][i+1:])[1]
-		_, _, err := SplitAddress(from)
-		if err != nil {
-			c.server.logfd("<%d %s\n", 501, err.Error())
-			return c.text.PrintfLine("%d %s", 501, err.Error())
+		email := emailRegExp.FindStringSubmatch(from)[1]
+			if _, _, err := SplitAddress(email); err != nil && !strings.Contains(email, "@") {
 		}
-		c.mailFrom = from
-		c.server.logfd("<%d %s\n", 250, "Ok")
+		c.mailFrom = email
 		return c.text.PrintfLine("%d %s", 250, "Ok")
 	case "RCPT":
 		if c.mailFrom == "" {
-			c.server.logfd("<%d %s\n", 503, "Bad sequence of commands")
 			return c.text.PrintfLine("%d %s", 503, "Bad sequence of commands")
 		}
 		if len(parts) < 2 {
-			c.server.logfd("<%d %s\n", 501, "Not enough arguments")
 			return c.text.PrintfLine("%d %s", 501, "Not enough arguments")
 		}
 		if !strings.HasPrefix(parts[1], "TO:") {
-			c.server.logfd("<%d %s\n", 501, "RCPT command must be immediately succeeded by 'TO:'")
 			return c.text.PrintfLine("%d %s", 501, "RCPT command must be immediately succeeded by 'TO:'")
 		}
-		i := strings.Index(parts[1], ":")
-		if i < 0 || !emailRegExp.MatchString(parts[1][i+1:]) {
-			c.server.logfd("<%d %s\n", 501, "RCPT command contained invalid address")
+		to := parts[1][3:]
+		if !emailRegExp.MatchString(to) {
 			return c.text.PrintfLine("%d %s", 501, "RCPT command contained invalid address")
 		}
-		to := emailRegExp.FindStringSubmatch(parts[1][i+1:])[1]
-		_, _, err := SplitAddress(to)
-		if err != nil {
-			c.server.logfd("<%d %s\n", 501, err.Error())
-			return c.text.PrintfLine("%d %s", 501, err.Error())
+		email := emailRegExp.FindStringSubmatch(to)[1]
+
+		if strings.ToLower(email) != "orb@pluto.onion" {
+			return c.text.PrintfLine("%d %s", 550, "Only orb@pluto.onion is an allowed recipient for incoming mail.")
 		}
-		c.mailTo = append(c.mailTo, to)
-		c.server.logfd("<%d %s\n", 250, "Ok")
+
+		c.mailTo = append(c.mailTo, email)
 		return c.text.PrintfLine("%d %s", 250, "Ok")
 	case "DATA":
-		if c.mailTo == nil || c.mailFrom == "" || len(c.mailTo) == 0 {
-			c.server.logfd("<%d %s\n", 503, "Bad sequence of commands")
+		if len(c.mailTo) == 0 || c.mailFrom == "" {
 			return c.text.PrintfLine("%d %s", 503, "Bad sequence of commands")
 		}
-		err := c.text.PrintfLine("%d %s", 354, "End data with <CR><LF>.<CR><LF>")
+		if err := c.text.PrintfLine("%d %s", 354, "End data with <CR><LF>.<CR><LF>"); err != nil {
+			return err
+		}
+		data, err := c.text.ReadDotBytes()
 		if err != nil {
 			return err
 		}
-		b, err := c.text.ReadDotBytes()
-		if err != nil {
-			return err
-		}
-		c.mailData = bytes.NewBuffer(b)
+		c.mailData = bytes.NewBuffer(data)
 
 		for _, recipient := range c.mailTo {
-			queuedEnvelope := &Envelope{
-				FromAgent:   c.fromAgent,
-				RemoteAddr:  c.remoteAddr,
-				MessageFrom: c.mailFrom,
-				MessageTo:   recipient,
-				MessageData: bytes.NewReader(c.mailData.Bytes()), 
-				ReceivedAt:  time.Now(),
-				RetryCount:  0,
-			}
-			select {
-			case mailQueue <- queuedEnvelope:
-				log.Printf("INFO: Mail from %s to %s queued for delivery.", queuedEnvelope.MessageFrom, queuedEnvelope.MessageTo)
-			default:
-				log.Printf("WARNING: Mail queue is full, dropping message from %s to %s.", queuedEnvelope.MessageFrom, queuedEnvelope.MessageTo)
+			if strings.ToLower(recipient) == "orb@pluto.onion" {
+				env := &Envelope{
+					FromAgent:           c.fromAgent,
+					RemoteAddr:          c.remoteAddr,
+					OriginalMessageFrom: c.mailFrom,
+					MessageFrom:         RewriteFromAddress,
+					MessageTo:           recipient,
+					MessageData:         bytes.NewReader(c.mailData.Bytes()),
+					ReceivedAt:          time.Now(),
+					RetryCount:          0,
+				}
+				c.server.logf("INFO: Received ORB mail for orb@pluto.onion")
+				if err := c.server.Handler.ServeSMTP(env); err != nil {
+					c.server.logf("ERROR: Failed to handle ORB mail: %v", err)
+					return c.text.PrintfLine("%d %s", 554, "Transaction failed (ORB processing error)")
+				}
+			} else {
+				return c.text.PrintfLine("%d %s", 550, "Only orb@pluto.onion is an allowed recipient for incoming mail.")
 			}
 		}
-
 		c.resetSession()
-		c.server.logfd("<%d %s\n", 250, "OK")
 		return c.text.PrintfLine("%d %s", 250, "OK")
 	case "RSET":
 		c.resetSession()
-		c.server.logfd("<%d %s\n", 250, "Ok")
 		return c.text.PrintfLine("%d %s", 250, "Ok")
-	case "VRFY":
-		c.server.logfd("<%d %s\n", 250, "OK")
-		return c.text.PrintfLine("%d %s", 250, "OK")
-	case "EXPN":
-		c.server.logfd("<%d %s\n", 250, "OK")
-		return c.text.PrintfLine("%d %s", 250, "OK")
-	case "HELP":
-		c.server.logfd("<%d %s\n", 250, "OK")
-		return c.text.PrintfLine("%d %s", 250, "OK")
-	case "NOOP":
-		c.server.logfd("<%d %s\n", 250, "OK")
+	case "VRFY", "EXPN", "HELP", "NOOP":
 		return c.text.PrintfLine("%d %s", 250, "OK")
 	case "QUIT":
-		c.server.logfd("<%d %s\n", 221, "OK")
 		c.quitSent = true
 		return c.text.PrintfLine("%d %s", 221, "OK")
 	default:
-		c.server.logfd("<%d %s\n", 500, "Command not recognized")
 		return c.text.PrintfLine("%d %s", 500, "Command not recognized")
 	}
-	return nil
 }
 
-func NewServeMux() *ServeMux { return &ServeMux{m: make(map[string]map[string]muxEntry)} }
+func NewServeMux(srv *Server) *ServeMux {
+	return &ServeMux{
+		m:      make(map[string]map[string]muxEntry),
+		server: srv,
+	}
+}
 
-var DefaultServeMux = NewServeMux()
+var DefaultServeMux *ServeMux
 
 func CanonicalizeEmail(local string) string {
 	local = strings.TrimSpace(local)
@@ -469,33 +430,19 @@ func CanonicalizeEmail(local string) string {
 func (mux *ServeMux) Handle(pattern string, handler Handler) {
 	mux.mu.Lock()
 	defer mux.mu.Unlock()
-
-	var localPart, domainPart string
-
-	if strings.Contains(pattern, "@") {
-		parts := strings.Split(pattern, "@")
-		if len(parts) == 2 {
-			localPart = parts[0]
-			domainPart = parts[1]
-		} else {
-			log.Fatalf("invalid pattern format for ServeMux.Handle: %s", pattern)
-		}
-	} else {
-		log.Fatalf("invalid pattern format, missing '@' in ServeMux.Handle pattern: %s", pattern)
+	parts := strings.SplitN(pattern, "@", 2)
+	if len(parts) != 2 {
+		log.Fatalf("invalid pattern format for ServeMux.Handle: %s", pattern)
 	}
-
+	localPart := CanonicalizeEmail(parts[0])
 	if localPart == "" {
 		localPart = "*"
 	}
-
-	canonicalLocalPart := CanonicalizeEmail(localPart)
-
-	dp, ok := mux.m[domainPart]
-	if !ok {
-		dp = make(map[string]muxEntry)
-		mux.m[domainPart] = dp
+	domainPart := parts[1]
+	if _, ok := mux.m[domainPart]; !ok {
+		mux.m[domainPart] = make(map[string]muxEntry)
 	}
-	dp[canonicalLocalPart] = muxEntry{h: handler, pattern: pattern}
+	mux.m[domainPart][localPart] = muxEntry{h: handler, pattern: pattern}
 }
 
 func (mux *ServeMux) HandleFunc(pattern string, handler func(envelope *Envelope) error) {
@@ -503,45 +450,22 @@ func (mux *ServeMux) HandleFunc(pattern string, handler func(envelope *Envelope)
 }
 
 func (mux *ServeMux) ServeSMTP(envelope *Envelope) error {
-	l, d, err := SplitAddress(envelope.MessageTo)
-	if err != nil {
-		return fmt.Errorf("Invalid Address: %w", err)
-	}
-	cl := CanonicalizeEmail(l)
-
-	mux.mu.RLock()
-	defer mux.mu.RUnlock()
-
-	if dp, ok := mux.m[d]; ok {
-		if ap, ok := dp[cl]; ok {
-			return ap.h.ServeSMTP(envelope)
+	if strings.ToLower(envelope.MessageTo) == "orb@pluto.onion" {
+		localPart, domainPart, err := SplitAddress(envelope.MessageTo)
+		if err != nil {
+			return fmt.Errorf("invalid address for ORB handler: %w", err)
 		}
-		if ap, ok := dp["*"]; ok {
-			return ap.h.ServeSMTP(envelope)
-		}
-	}
+		canonicalLocal := CanonicalizeEmail(localPart)
+		mux.mu.RLock()
+		defer mux.mu.RUnlock()
 
-	if isOnionDomain(d) {
-		if dp, ok := mux.m["*.onion"]; ok {
-			if ap, ok := dp[cl]; ok {
-				return ap.h.ServeSMTP(envelope)
-			}
-			if ap, ok := dp["*"]; ok {
-				return ap.h.ServeSMTP(envelope)
+		if domainHandlers, ok := mux.m[domainPart]; ok {
+			if handler, ok := domainHandlers[canonicalLocal]; ok {
+				return handler.h.ServeSMTP(envelope)
 			}
 		}
 	}
-
-	if dp, ok := mux.m["*"]; ok {
-		if ap, ok := dp[cl]; ok {
-			return ap.h.ServeSMTP(envelope)
-		}
-		if ap, ok := dp["*"]; ok {
-			return ap.h.ServeSMTP(envelope)
-		}
-	}
-
-	return errors.New("Bad Address: No handler found for " + envelope.MessageTo)
+	return fmt.Errorf("no handler found for recipient %s (only orb@pluto.onion allowed)", envelope.MessageTo)
 }
 
 func createTorListener(addr string) (net.Listener, error) {
@@ -550,153 +474,315 @@ func createTorListener(addr string) (net.Listener, error) {
 		return nil, err
 	}
 	if host != "127.0.0.1" && host != "localhost" {
-		return nil, errors.New("server must listen on localhost for Tor hidden service via torrc configuration")
+		return nil, errors.New("server must listen on localhost for Tor hidden service")
 	}
-
 	listener, err := net.Listen("tcp", addr)
 	if err != nil {
 		return nil, err
 	}
+	return &torListener{Listener: listener}, nil
+}
 
-	return &torListener{
-		Listener: listener,
-	}, nil
+func getConfigDir() (string, error) {
+	var configDir string
+	switch runtime.GOOS {
+	case "windows":
+		configDir = os.Getenv("APPDATA")
+		if configDir == "" {
+			return "", errors.New("APPDATA environment variable not set")
+		}
+		configDir = filepath.Join(configDir, "PlutoGo")
+	case "darwin":
+		configDir = filepath.Join(os.Getenv("HOME"), "Library", "Application Support", "PlutoGo")
+	default:
+		configDir = filepath.Join(os.Getenv("HOME"), ".config", "plutogo")
+	}
+	if err := os.MkdirAll(configDir, 0700); err != nil {
+		return "", fmt.Errorf("could not create config directory: %v", err)
+	}
+	return configDir, nil
+}
+
+func ed25519PrivateKeyToCurve25519(pk *memguard.LockedBuffer) (*memguard.LockedBuffer, error) {
+	if pk == nil || pk.Size() != ed25519.PrivateKeySize {
+		return nil, errors.New("invalid private key size")
+	}
+	h := sha512.New()
+	h.Write(pk.Bytes()[:ed25519.SeedSize])
+	out := h.Sum(nil)
+	return memguard.NewBufferFromBytes(out[:curve25519.ScalarSize]), nil
+}
+
+func DecryptMinicrypt(ciphertext io.Reader, key *memguard.LockedBuffer) (*memguard.LockedBuffer, error) {
+	if key == nil || key.Size() == 0 {
+		return nil, errors.New("decryption requires a valid private key")
+	}
+	data, err := io.ReadAll(ciphertext)
+	if err != nil {
+		return nil, fmt.Errorf("input could not be read: %w", err)
+	}
+	secureData := memguard.NewBufferFromBytes(data)
+	defer secureData.Destroy()
+
+	decoded, err := base64.StdEncoding.DecodeString(string(secureData.Bytes()))
+	if err != nil {
+		return nil, fmt.Errorf("base64 decoding failed: %w", err)
+	}
+	const headerSize = curve25519.PointSize + chacha20poly1305.NonceSizeX
+	if len(decoded) < headerSize {
+		return nil, errors.New("message too short")
+	}
+	curvePriv, err := ed25519PrivateKeyToCurve25519(key)
+	if err != nil {
+		return nil, fmt.Errorf("private key conversion failed: %w", err)
+	}
+	defer curvePriv.Destroy()
+
+	ephPub := decoded[:curve25519.PointSize]
+	nonce := decoded[curve25519.PointSize:headerSize]
+	ciphertextBytes := decoded[headerSize:]
+	sharedSecret, err := curve25519.X25519(curvePriv.Bytes(), ephPub)
+	if err != nil {
+		return nil, fmt.Errorf("key exchange failed: %w", err)
+	}
+	secureSecret := memguard.NewBufferFromBytes(sharedSecret)
+	defer secureSecret.Destroy()
+
+	aead, err := chacha20poly1305.NewX(secureSecret.Bytes())
+	if err != nil {
+		return nil, fmt.Errorf("decryption initialization failed: %w", err)
+	}
+	plaintext, err := aead.Open(nil, nonce, ciphertextBytes, nil)
+	if err != nil {
+		return nil, fmt.Errorf("decryption failed: %w", err)
+	}
+
+	securePlaintext := memguard.NewBufferFromBytes(plaintext)
+
+	for i := range plaintext {
+		plaintext[i] = 0
+	}
+
+	return securePlaintext, nil
+}
+
+func (mux *ServeMux) handleORB(envelope *Envelope) error {
+	if envelope.MessageData == nil {
+		mux.server.logf("ERROR: MessageData is nil for ORB message.")
+		return errors.New("message data is missing")
+	}
+
+	mailDataBytes, err := io.ReadAll(envelope.MessageData)
+	if err != nil {
+		mux.server.logf("ERROR: Failed to read raw ORB message data: %v", err)
+		return fmt.Errorf("failed to read raw ORB message data: %w", err)
+	}
+
+	normalizedContent := regexp.MustCompile(`\r?\n`).ReplaceAllString(string(mailDataBytes), "\n")
+	var originalBody string
+	if bodySeparator := strings.Index(normalizedContent, "\n\n"); bodySeparator != -1 {
+		originalBody = strings.TrimLeft(normalizedContent[bodySeparator+2:], " \t\n")
+	} else {
+		originalBody = normalizedContent
+	}
+
+	orbRegexp := regexp.MustCompile(`(?s)::([^:]+?)::`)
+	match := orbRegexp.FindStringSubmatch(originalBody)
+	if len(match) < 2 {
+		return errors.New("ORB block not found or invalid format in message body")
+	}
+	orbBlockRaw := match[0]
+	orbPayload := match[1]
+
+	secureForwardAddressBuffer, err := DecryptMinicrypt(strings.NewReader(orbPayload), mux.server.MinicryptKey)
+	if err != nil {
+		return fmt.Errorf("failed to decrypt ORB block: %w", err)
+	}
+	defer secureForwardAddressBuffer.Destroy()
+	forwardAddress := strings.TrimSpace(string(secureForwardAddressBuffer.Bytes()))
+
+	_, _, err = SplitAddress(forwardAddress)
+	if err != nil {
+		return fmt.Errorf("decrypted forward address '%s' is not a valid onion address: %w", forwardAddress, err)
+	}
+
+	cleanedBody := strings.Replace(originalBody, orbBlockRaw, "", 1)
+	cleanedBody = regexp.MustCompile(`(?m)^[ \t]+`).ReplaceAllString(cleanedBody, "")
+	cleanedBody = regexp.MustCompile(`\n{3,}`).ReplaceAllString(cleanedBody, "\n\n")
+	cleanedBody = strings.TrimSpace(cleanedBody)
+
+	var finalMessage bytes.Buffer
+	finalMessage.WriteString(fmt.Sprintf("From: %s\r\n", RewriteFromAddress))
+	finalMessage.WriteString(fmt.Sprintf("To: %s\r\n", forwardAddress))
+	finalMessage.WriteString("\r\n")
+
+	if cleanedBody != "" {
+		finalMessage.WriteString(regexp.MustCompile(`\n`).ReplaceAllString(cleanedBody, "\r\n"))
+	}
+
+	forwardEnvelope := &Envelope{
+		FromAgent:           envelope.FromAgent,
+		RemoteAddr:          envelope.RemoteAddr,
+		OriginalMessageFrom: envelope.OriginalMessageFrom,
+		MessageFrom:         RewriteFromAddress,
+		MessageTo:           forwardAddress,
+		MessageData:         bytes.NewReader(finalMessage.Bytes()),
+		ReceivedAt:          time.Now(),
+		RetryCount:          0,
+	}
+
+	mux.server.logf("INFO: Forwarding mail from orb@pluto.onion to an ORB-encrypted onion address.")
+	if !queueEnvelope(forwardEnvelope) {
+		return errors.New("mail queue is full")
+	}
+	return nil
 }
 
 func smtpRelay(envelope *Envelope) error {
-	_, recipientDomain, err := SplitAddress(envelope.MessageTo)
+	_, domain, err := SplitAddress(envelope.MessageTo)
 	if err != nil {
 		return fmt.Errorf("invalid recipient address for relay: %w", err)
 	}
 
-	targetAddr := net.JoinHostPort(recipientDomain, "2525")
-
-	netDialer := &net.Dialer{
-		Timeout: DeliveryTimeout,
-	}
-
-	torDialer, err := proxy.SOCKS5("tcp", TorSocksProxyAddr, nil, netDialer)
+	targetAddr := net.JoinHostPort(domain, "2525")
+	dialer := &net.Dialer{Timeout: DeliveryTimeout}
+	torDialer, err := proxy.SOCKS5("tcp", TorSocksProxyAddr, nil, dialer)
 	if err != nil {
-		return fmt.Errorf("failed to create Tor SOCKS5 dialer for relay: %w", err)
+		return fmt.Errorf("failed to create Tor dialer: %w", err)
 	}
-
-	_ , cancel := context.WithTimeout(context.Background(), DeliveryTimeout)
-	defer cancel()
-
 	conn, err := torDialer.Dial("tcp", targetAddr)
 	if err != nil {
-		return fmt.Errorf("failed to connect to %s via Tor (timeout %v): %w", targetAddr, DeliveryTimeout, err)
+		return fmt.Errorf("failed to connect to relay target (%s): %w", targetAddr, err)
 	}
 	defer conn.Close()
-
 	conn.SetDeadline(time.Now().Add(DeliveryTimeout))
-
-	c, err := smtp.NewClient(conn, recipientDomain)
+	client, err := smtp.NewClient(conn, domain)
 	if err != nil {
-		return fmt.Errorf("failed to create SMTP client for %s: %w", targetAddr, err)
+		return fmt.Errorf("failed to create SMTP client: %w", err)
 	}
-	defer c.Close()
+	defer client.Close()
 
-	if ok, _ := c.Extension("STARTTLS"); ok {
-		config := &tls.Config{
+	if ok, _ := client.Extension("STARTTLS"); ok {
+		cfg := &tls.Config{
 			InsecureSkipVerify: true,
-			ServerName:         recipientDomain,
+			ServerName:         domain,
 		}
-		if err = c.StartTLS(config); err != nil {
-			log.Printf("WARNING: Failed to STARTTLS with %s: %v", targetAddr, err)
+		if err := client.StartTLS(cfg); err != nil {
+			log.Printf("WARNING: Failed to STARTTLS with relay target %s: %v", domain, err)
 		}
 	}
 
-	if err = c.Mail(envelope.MessageFrom); err != nil {
-		return fmt.Errorf("failed to set MAIL FROM %s: %w", envelope.MessageFrom, err)
+	if err := client.Mail(RewriteFromAddress); err != nil {
+		return fmt.Errorf("MAIL FROM failed (From: %s): %w", RewriteFromAddress, err)
 	}
 
-	if err = c.Rcpt(envelope.MessageTo); err != nil {
-		return fmt.Errorf("failed to set RCPT TO %s: %w", envelope.MessageTo, err)
+	if err := client.Rcpt(envelope.MessageTo); err != nil {
+		return fmt.Errorf("RCPT TO failed (To: %s): %w", envelope.MessageTo, err)
 	}
 
-	wc, err := c.Data()
+	wc, err := client.Data()
 	if err != nil {
-		return fmt.Errorf("failed to get DATA writer: %w", err)
+		return fmt.Errorf("DATA command failed: %w", err)
 	}
 	defer wc.Close()
 
-	if _, err = io.Copy(wc, envelope.MessageData); err != nil {
-		return fmt.Errorf("failed to write email data: %w", err)
+	if _, err := io.Copy(wc, envelope.MessageData); err != nil {
+		return fmt.Errorf("message transfer failed: %w", err)
 	}
-
-	log.Printf("Successfully relayed mail from %s to %s via Tor", envelope.MessageFrom, envelope.MessageTo)
 	return nil
+}
+
+func queueEnvelope(envelope *Envelope) bool {
+	mailQueueMutex.Lock()
+	defer mailQueueMutex.Unlock()
+	select {
+	case mailQueue <- envelope:
+		log.Printf("INFO: Mail queued for delivery.")
+		return true
+	default:
+		return false
+	}
 }
 
 func StartRelayWorkers(queue chan *Envelope, workerCount int) {
 	for i := 0; i < workerCount; i++ {
-		go func(workerID int) {
-			log.Printf("Relay Worker %d started.", workerID)
-			for envelope := range queue {
-				log.Printf("Relay Worker %d: Attempting delivery for mail from %s to %s (Retry %d)", 
-					workerID, envelope.MessageFrom, envelope.MessageTo, envelope.RetryCount)
-				err := smtpRelay(envelope)
+		go func(id int) {
+			log.Printf("INFO: Relay Worker %d started", id)
+			for env := range queue {
+				log.Printf("INFO: Worker %d: Processing mail.", id)
+				err := smtpRelay(env)
 				if err != nil {
-					log.Printf("Relay Worker %d: Delivery failed for mail from %s to %s: %v", 
-						workerID, envelope.MessageFrom, envelope.MessageTo, err)
-					
-					if envelope.RetryCount < 3 {
-						envelope.RetryCount++
-						go func(env *Envelope) {
-							time.Sleep(5 * time.Second * time.Duration(env.RetryCount)) 
-							select {
-								case queue <- env:
-									log.Printf("Relay Worker %d: Re-queued mail from %s to %s for retry %d.", workerID, env.MessageFrom, env.MessageTo, env.RetryCount)
-								default:
-									log.Printf("Relay Worker %d: Failed to re-queue mail from %s to %s, queue full. Dropped after %d retries.", workerID, env.MessageFrom, env.MessageTo, env.RetryCount-1)
-							}
-						}(envelope)
+					log.Printf("ERROR: Worker %d: Failed to deliver mail: %v", id, err)
+					if env.RetryCount < 3 {
+						env.RetryCount++
+						time.Sleep(time.Duration(env.RetryCount) * 5 * time.Second)
+						if !queueEnvelope(env) {
+							log.Printf("WARNING: Worker %d: Failed to requeue message.", id)
+						}
 					} else {
-						log.Printf("Relay Worker %d: Mail from %s to %s permanently failed after %d retries.", workerID, envelope.MessageFrom, envelope.MessageTo, envelope.RetryCount)
+						log.Printf("ERROR: Worker %d: Permanent failure after %d retries.", id, env.RetryCount)
 					}
 				} else {
-					log.Printf("Relay Worker %d: Successfully delivered mail from %s to %s.", workerID, envelope.MessageFrom, envelope.MessageTo)
+					log.Printf("INFO: Worker %d: Successfully delivered mail.", id)
 				}
 			}
-			log.Printf("Relay Worker %d stopped.", workerID) 
+			log.Printf("INFO: Relay Worker %d stopped", id)
 		}(i)
 	}
 }
 
 func main() {
 	flag.Parse()
-
 	if *certFile == "" || *keyFile == "" {
 		log.Fatal("Both -cert and -key flags are required")
 	}
+	var minicryptKey *memguard.LockedBuffer
+	if *minicryptKeyFile != "" {
+		pemData, err := os.ReadFile(*minicryptKeyFile)
+		if err != nil {
+			log.Fatalf("Failed to read minicrypt key: %v", err)
+		}
+		block, _ := pem.Decode(pemData)
+		if block == nil || block.Type != "PRIVATE KEY" {
+			log.Fatal("Invalid minicrypt key format")
+		}
+		if len(block.Bytes) != ed25519.PrivateKeySize {
+			log.Fatalf("Invalid minicrypt key size: expected %d, got %d", ed25519.PrivateKeySize, len(block.Bytes))
+		}
+		minicryptKey = memguard.NewBufferFromBytes(block.Bytes)
+		log.Printf("INFO: Loaded Minicrypt key from %s (%d bytes)", *minicryptKeyFile, minicryptKey.Size())
+	} else {
+		log.Fatal("Minicrypt key is required for ORB functionality (-mk flag).")
+	}
 
 	mailQueue = make(chan *Envelope, 100)
-
 	StartRelayWorkers(mailQueue, RelayWorkerCount)
 
 	server := &Server{
-		Name:    "localhost",
-		Addr:    "127.0.0.1:2525",
-		Handler: DefaultServeMux,
-		Debug:   true,
+		Name:         "localhost",
+		Addr:         "127.0.0.1:2525",
+		Debug:        false,
+		MinicryptKey: minicryptKey,
 	}
 
-	DefaultServeMux.HandleFunc("*@*.onion", func(envelope *Envelope) error {
-		return nil
+	DefaultServeMux = NewServeMux(server)
+	server.Handler = DefaultServeMux
+
+	DefaultServeMux.HandleFunc("orb@pluto.onion", func(e *Envelope) error {
+		return DefaultServeMux.handleORB(e)
 	})
 
 	listener, err := createTorListener(server.Addr)
 	if err != nil {
-		log.Fatalf("Failed to create Tor listener: %v", err)
+		log.Fatalf("Failed to create listener: %v", err)
 	}
 
-	log.Printf("Starting SMTP server as Tor hidden service on %s", server.Addr)
-	log.Printf("Expecting Tor SOCKS5 proxy to be running on %s", TorSocksProxyAddr)
-	log.Printf("Starting %d relay workers with a %v delivery timeout.", RelayWorkerCount, DeliveryTimeout)
+	log.Printf("INFO: Starting SMTP server on %s", server.Addr)
+	log.Printf("INFO: Using Tor proxy at %s", TorSocksProxyAddr)
+	log.Printf("INFO: Started %d relay workers", RelayWorkerCount)
+	log.Printf("INFO: Server is configured to only accept incoming mail for 'orb@pluto.onion' and relay to the address specified in the ORB block with strict header filtering.")
+
 	if err := server.ServeTLS(listener); err != nil {
-		log.Fatalf("Server error: %v", err)
+		log.Fatalf("Server failed: %v", err)
 	}
-
-	select {} 
 }
