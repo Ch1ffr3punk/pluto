@@ -26,7 +26,7 @@ You simply use [minicrypt](https://github.com/Ch1ffr3punk/minicrypt) to encrypt 
 with the server's public key and then add the markers.  
 
 This is how a demo message looks like:
-
+```
 From: Mini Mailer <bounce.me@mini.mailer.msg>  
 To: orb@pluto.onion  
 
@@ -42,9 +42,9 @@ This is a test with an ORB.
 
 Regards  
 Stefan  
-
+```
 And this how it looks when it arrived:  
-
+```
 Received: from localhost (kubernetes.docker.internal. [127.0.0.1])  
         by iria (SMTPDump) with SMTP  
         for <pollux@fswlpxkp6xdrwrcu3dmby4lwv4z22bep32s3f3ffrua3x4bmvdyhg2ad.onion>;  
@@ -58,7 +58,7 @@ This is a test with an ORB.
 
 Regards  
 Stefan  
-
+```
 
 
 
