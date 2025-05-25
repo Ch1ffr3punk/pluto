@@ -15,13 +15,13 @@ You only need to give others your ORB block, so that others
 can use it as reply block, to send you messages.  
 
 An ORB looks like this:
-
+```
 ::  
 qr7cjQXe/7YsmbBhSLzOalGGJeCoGz9YzmDLwKWwp3fkBGMjGYYTLMGG0VPwTzBJ  
 sYtSQzYtZSXOCL5owEBhP9xsgnFA1dGjpKQnJYa9MMdLVe/sB2DFdrlbun2HoCvw  
 t64o+4rI90zRM5pz1QzkBWOKuDSFkH4btNn6I/fyt6kmGxUzFzb93DvDCnfNyQ==  
 ::  
-
+```
 You simply use [minicrypt](https://github.com/Ch1ffr3punk/minicrypt) to encrypt your .onion email address  
 with the server's public key and then add the markers.  
 
