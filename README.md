@@ -2,6 +2,9 @@
 pluto - A Tor Hidden Service SMTP Relay using ORB.
 Tested with [Mini Mailer](https://github.com/Ch1ffr3punk/mmg) and [smtpdump](https://github.com/Ch1ffr3punk/smtpdump).
 
-A README for how to use the ORB (Onion Reply Block) feature will be added soon.  
-An ORB must be created with minicrypt and contains the .onion email address.
+The genkeys folder contains a small utility to create the keypair for ORB usage.  
+
+TLS certificates can be created with openssl.  
+$ openssl req -nodes -new -x509 -keyout key.pem -out cert.pem  
+
 
