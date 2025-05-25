@@ -15,6 +15,7 @@ You only need to give others your ORB block, so that others
 can use it as reply block, to send you messages.  
 
 An ORB looks like this:
+
 ```
 ::  
 qr7cjQXe/7YsmbBhSLzOalGGJeCoGz9YzmDLwKWwp3fkBGMjGYYTLMGG0VPwTzBJ  
@@ -26,6 +27,7 @@ You simply use [minicrypt](https://github.com/Ch1ffr3punk/minicrypt) to encrypt 
 with the server's public key and then add the markers.  
 
 This is how a demo message looks like:
+
 ```
 From: Mini Mailer <bounce.me@mini.mailer.msg>  
 To: orb@pluto.onion  
