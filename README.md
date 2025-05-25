@@ -60,8 +60,7 @@ Regards
 Stefan  
 ```
 
-If you like Mini Mailer, as much as I do, for Nym Mixnet usage,   
-or Tor usage, consider a small donation.  
+If you like pluto, as much as I do, for Tor usage, consider a small donation.    
 ```  
 BTC: 129yB8kL8mQVZufNS4huajsdJPa48aHwHz  
 Nym: n1yql04xjhmlhfkjsk8x8g7fynm27xzvnk23wfys  
