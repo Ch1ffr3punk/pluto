@@ -22,7 +22,7 @@ sYtSQzYtZSXOCL5owEBhP9xsgnFA1dGjpKQnJYa9MMdLVe/sB2DFdrlbun2HoCvw
 t64o+4rI90zRM5pz1QzkBWOKuDSFkH4btNn6I/fyt6kmGxUzFzb93DvDCnfNyQ==  
 ::  
 
-You simply use minicrypt to encrypt your .onion email address  
+You simply use [minicrypt](https://github.com/Ch1ffr3punk/minicrypt) to encrypt your .onion email address  
 with the server's public key and then add the markers.  
 
 This is how a demo message looks like:
