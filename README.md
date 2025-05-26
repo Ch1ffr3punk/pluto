@@ -45,7 +45,7 @@ This is a test with an ORB.
 Regards  
 Stefan  
 ```
-And this how it looks when it arrived:  
+And this is how it looks when the message arrived:  
 ```
 Received: from localhost (kubernetes.docker.internal. [127.0.0.1])  
         by iria (SMTPDump) with SMTP  
