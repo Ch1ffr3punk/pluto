@@ -575,7 +575,7 @@ func (mux *ServeMux) handleORB(envelope *Envelope) error {
 	mailDataBytes, err := io.ReadAll(envelope.MessageData)
 	if err != nil {
 		mux.server.logf("ERROR: Failed to read raw ORB message data: %v", err)
-		return fmt.Errorf("failed to read raw ORB message data: %w", err)
+		return fmt.Errorf("Failed to read raw ORB message data: %w", err)
 	}
 
 	normalizedContent := regexp.MustCompile(`\r?\n`).ReplaceAllString(string(mailDataBytes), "\n")
@@ -596,7 +596,7 @@ func (mux *ServeMux) handleORB(envelope *Envelope) error {
 
 	secureForwardAddressBuffer, err := DecryptMinicrypt(strings.NewReader(orbPayload), mux.server.MinicryptKey)
 	if err != nil {
-		return fmt.Errorf("failed to decrypt ORB block: %w", err)
+		return fmt.Errorf("Failed to decrypt ORB block: %w", err)
 	}
 	defer secureForwardAddressBuffer.Destroy()
 	forwardAddress := strings.TrimSpace(string(secureForwardAddressBuffer.Bytes()))
@@ -648,17 +648,17 @@ func smtpRelay(envelope *Envelope) error {
 	dialer := &net.Dialer{Timeout: DeliveryTimeout}
 	torDialer, err := proxy.SOCKS5("tcp", TorSocksProxyAddr, nil, dialer)
 	if err != nil {
-		return fmt.Errorf("failed to create Tor dialer: %w", err)
+		return fmt.Errorf("Failed to create Tor dialer: %w", err)
 	}
 	conn, err := torDialer.Dial("tcp", targetAddr)
 	if err != nil {
-		return fmt.Errorf("failed to connect to relay target (%s): %w", targetAddr, err)
+		return fmt.Errorf("Failed to connect to relay target")
 	}
 	defer conn.Close()
 	conn.SetDeadline(time.Now().Add(DeliveryTimeout))
 	client, err := smtp.NewClient(conn, domain)
 	if err != nil {
-		return fmt.Errorf("failed to create SMTP client: %w", err)
+		return fmt.Errorf("Failed to create SMTP client: %w", err)
 	}
 	defer client.Close()
 
@@ -668,7 +668,7 @@ func smtpRelay(envelope *Envelope) error {
 			ServerName:         domain,
 		}
 		if err := client.StartTLS(cfg); err != nil {
-			log.Printf("WARNING: Failed to STARTTLS with relay target %s: %v", domain, err)
+			log.Printf("WARNING: Failed to STARTTLS with relay target")
 		}
 	}
 
