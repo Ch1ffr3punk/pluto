@@ -713,7 +713,7 @@ func StartRelayWorkers(queue chan *Envelope, workerCount int) {
 				err := smtpRelay(env)
 				if err != nil {
 					log.Printf("ERROR: Worker %d: Failed to deliver mail: %v", id, err)
-					if env.RetryCount < 3 {
+					if env.RetryCount < 9 {
 						env.RetryCount++
 						time.Sleep(time.Duration(env.RetryCount) * 5 * time.Second)
 						if !queueEnvelope(env) {
@@ -750,7 +750,7 @@ func main() {
 			log.Fatalf("Invalid minicrypt key size: expected %d, got %d", ed25519.PrivateKeySize, len(block.Bytes))
 		}
 		minicryptKey = memguard.NewBufferFromBytes(block.Bytes)
-		log.Printf("INFO: Loaded Minicrypt key from %s (%d bytes)", *minicryptKeyFile, minicryptKey.Size())
+		log.Printf("INFO: Loaded minicrypt key from %s (%d bytes)", *minicryptKeyFile, minicryptKey.Size())
 	} else {
 		log.Fatal("Minicrypt key is required for ORB functionality (-mk flag).")
 	}
