@@ -75,6 +75,12 @@ My pluto smtp relay (24/7):
 ```
 rkucect2x3hi3xgibytohtjbmextaacqpxvvqp6eyxu4bi2i7jxupjyd.onion  
 Port: 2525
+
+and it's public mincrypt key:
+
+-----BEGIN PUBLIC KEY-----
+d+u+KtHqtOD5tBopn1F602rLnGh2wLi+QOdqOolJFlo=
+-----END PUBLIC KEY-----
 ```
 
 If you like pluto, as much as I do, for Tor usage, consider a small donation.    
