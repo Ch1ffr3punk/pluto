@@ -77,9 +77,6 @@ rkucect2x3hi3xgibytohtjbmextaacqpxvvqp6eyxu4bi2i7jxupjyd.onion
 Port: 2525
 ```
 
-
-```
-
 If you like pluto, as much as I do, for Tor usage, consider a small donation.    
 ```  
 BTC: 129yB8kL8mQVZufNS4huajsdJPa48aHwHz  
