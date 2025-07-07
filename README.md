@@ -65,16 +65,15 @@ To test an ORB with others, you can send me an anonymous email. :-)
 
 My ORB:
 ```
-::
-1c+54YuBX3WPZ4il7hpU1WhAx9OhCwjYA7r5Om1sfzAk4nLl0m8BtcJ7OusmT6b5
-bMUGWW+1B/ieuR6ChA9SYAeAH1Jlc6+f+G0Be9FJ+bxrsGjWcdfNJXOprbU5lIfw
-ppMLczmi/17viYV/V6dvhtPdDL08rxkJYeHWwFV3Gfcos1DAGlf09gw=
+::  
+1c+54YuBX3WPZ4il7hpU1WhAx9OhCwjYA7r5Om1sfzAk4nLl0m8BtcJ7OusmT6b5  
+bMUGWW+1B/ieuR6ChA9SYAeAH1Jlc6+f+G0Be9FJ+bxrsGjWcdfNJXOprbU5lIfw  
+ppMLczmi/17viYV/V6dvhtPdDL08rxkJYeHWwFV3Gfcos1DAGlf09gw=  
 ::
 ```
-
-My pluto smtp relay (24/7):
+My pluto smtp relay (24/7):  
 ```
-rkucect2x3hi3xgibytohtjbmextaacqpxvvqp6eyxu4bi2i7jxupjyd.onion
+rkucect2x3hi3xgibytohtjbmextaacqpxvvqp6eyxu4bi2i7jxupjyd.onion  
 Port: 2525
 ```
 
