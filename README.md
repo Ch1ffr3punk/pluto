@@ -79,7 +79,7 @@ wP/uWjblgesQ9gsoMbPNuVXS5+9oDdKCqNQ62LhLNXo=
 -----END PUBLIC KEY-----
 
 ```
-My pluto smtp relay (24/7) and it's public minicrypt key:   
+My pluto smtp relay (24/7) and it's required public minicrypt key:   
 ```
 rkucect2x3hi3xgibytohtjbmextaacqpxvvqp6eyxu4bi2i7jxupjyd.onion  
 Port: 2525
