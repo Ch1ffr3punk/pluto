@@ -61,33 +61,6 @@ This is a test with an ORB.
 Regards  
 Stefan
 ```
-To test an ORB with others, you can send me an anonymous email. :-)
-
-My ORB:
-```
-::  
-AO1lRndxWq2hH1nfbjoHjakC/TaiK2S1iuWwGpw6rAFXooEbQPswopGfUNww9vch
-oonjpwr4I9/yXgQRUfGHtPIJAKA0STC+lTSAjp5JJZi7XIfnCF4hnxDpDTxe8kDI
-O9fh4Mbq//alEz1S055+9/9APxyeuGzm386hEmHHNSFEMnkCRv6DLVydasNI
-::
-```
-
-And optionally my minicrypt public key:
-```
------BEGIN PUBLIC KEY-----
-wP/uWjblgesQ9gsoMbPNuVXS5+9oDdKCqNQ62LhLNXo=
------END PUBLIC KEY-----
-
-```
-My pluto smtp relay (24/7) and it's required public minicrypt key:   
-```
-rkucect2x3hi3xgibytohtjbmextaacqpxvvqp6eyxu4bi2i7jxupjyd.onion  
-Port: 2525
-
------BEGIN PUBLIC KEY-----
-d+u+KtHqtOD5tBopn1F602rLnGh2wLi+QOdqOolJFlo=
------END PUBLIC KEY-----
-```
 
 If you like pluto, as much as I do, for Tor usage, consider a small donation.    
 ```  
