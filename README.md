@@ -71,9 +71,9 @@ oonjpwr4I9/yXgQRUfGHtPIJAKA0STC+lTSAjp5JJZi7XIfnCF4hnxDpDTxe8kDI
 O9fh4Mbq//alEz1S055+9/9APxyeuGzm386hEmHHNSFEMnkCRv6DLVydasNI
 ::
 ```
-```
-And optionally my minicrypt public key:
 
+And optionally my minicrypt public key:
+```
 -----BEGIN PUBLIC KEY-----
 wP/uWjblgesQ9gsoMbPNuVXS5+9oDdKCqNQ62LhLNXo=
 -----END PUBLIC KEY-----
