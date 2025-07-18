@@ -66,9 +66,9 @@ To test an ORB with others, you can send me an anonymous email. :-)
 My ORB:
 ```
 ::  
-1c+54YuBX3WPZ4il7hpU1WhAx9OhCwjYA7r5Om1sfzAk4nLl0m8BtcJ7OusmT6b5  
-bMUGWW+1B/ieuR6ChA9SYAeAH1Jlc6+f+G0Be9FJ+bxrsGjWcdfNJXOprbU5lIfw  
-ppMLczmi/17viYV/V6dvhtPdDL08rxkJYeHWwFV3Gfcos1DAGlf09gw=  
+AO1lRndxWq2hH1nfbjoHjakC/TaiK2S1iuWwGpw6rAFXooEbQPswopGfUNww9vch
+oonjpwr4I9/yXgQRUfGHtPIJAKA0STC+lTSAjp5JJZi7XIfnCF4hnxDpDTxe8kDI
+O9fh4Mbq//alEz1S055+9/9APxyeuGzm386hEmHHNSFEMnkCRv6DLVydasNI
 ::
 ```
 My pluto smtp relay (24/7) and it's public minicrypt key:   
