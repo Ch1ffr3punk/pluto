@@ -8,7 +8,7 @@ TLS certificates can be created with openssl.
 $ openssl req -nodes -new -x509 -keyout key.pem -out cert.pem  
 
 An ORB is an Onion Reply Block, allowing you to hide your real    
-.onion email address, like Mixminion and the Nym Mixnet does    
+.onion email address, like Mixminion did and the Nym Mixnet does    
 with SURBS.
 
 You only need to give others your ORB block, so that others  
