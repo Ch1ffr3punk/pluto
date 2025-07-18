@@ -70,7 +70,8 @@ AO1lRndxWq2hH1nfbjoHjakC/TaiK2S1iuWwGpw6rAFXooEbQPswopGfUNww9vch
 oonjpwr4I9/yXgQRUfGHtPIJAKA0STC+lTSAjp5JJZi7XIfnCF4hnxDpDTxe8kDI
 O9fh4Mbq//alEz1S055+9/9APxyeuGzm386hEmHHNSFEMnkCRv6DLVydasNI
 ::
-
+```
+```
 And optionally my minicrypt public key:
 
 -----BEGIN PUBLIC KEY-----
