@@ -218,7 +218,7 @@ func (c *conn) serve() {
 	c.server.logf("INFO: Connection established from %s", c.remoteAddr)
 	err := c.text.PrintfLine("%d %s %s", 220, c.server.Name, "ESMTP")
 	if err != nil {
-		c.server.logf("ERROR: Connection error with %s: %v", c.remoteAddr, err)
+		c.server.logf("ERROR: Connection error with remote address")
 		return
 	}
 	for !c.quitSent && err == nil {
@@ -226,7 +226,7 @@ func (c *conn) serve() {
 	}
 	c.text.Close()
 	c.rwc.Close()
-	c.server.logf("INFO: Connection closed from %s", c.remoteAddr)
+	c.server.logf("INFO: Connection closed from remote address")
 }
 
 func (c *conn) resetSession() {
@@ -453,7 +453,7 @@ func (mux *ServeMux) ServeSMTP(envelope *Envelope) error {
 	if strings.ToLower(envelope.MessageTo) == "orb@pluto.onion" {
 		localPart, domainPart, err := SplitAddress(envelope.MessageTo)
 		if err != nil {
-			return fmt.Errorf("invalid address for ORB handler: %w", err)
+			return fmt.Errorf("invalid address for ORB handler")
 		}
 		canonicalLocal := CanonicalizeEmail(localPart)
 		mux.mu.RLock()
@@ -574,8 +574,8 @@ func (mux *ServeMux) handleORB(envelope *Envelope) error {
 
 	mailDataBytes, err := io.ReadAll(envelope.MessageData)
 	if err != nil {
-		mux.server.logf("ERROR: Failed to read raw ORB message data: %v", err)
-		return fmt.Errorf("Failed to read raw ORB message data: %w", err)
+		mux.server.logf("ERROR: Failed to read raw ORB message data")
+		return fmt.Errorf("Failed to read raw ORB message data")
 	}
 
 	normalizedContent := regexp.MustCompile(`\r?\n`).ReplaceAllString(string(mailDataBytes), "\n")
@@ -603,7 +603,7 @@ func (mux *ServeMux) handleORB(envelope *Envelope) error {
 
 	_, _, err = SplitAddress(forwardAddress)
 	if err != nil {
-		return fmt.Errorf("decrypted forward address '%s' is not a valid onion address: %w", forwardAddress, err)
+		return fmt.Errorf("decrypted forward address is not a valid onion address")
 	}
 
 	cleanedBody := strings.Replace(originalBody, orbBlockRaw, "", 1)
@@ -641,7 +641,7 @@ func (mux *ServeMux) handleORB(envelope *Envelope) error {
 func smtpRelay(envelope *Envelope) error {
 	_, domain, err := SplitAddress(envelope.MessageTo)
 	if err != nil {
-		return fmt.Errorf("invalid recipient address for relay: %w", err)
+		return fmt.Errorf("invalid recipient address for relay")
 	}
 
 	targetAddr := net.JoinHostPort(domain, "2525")
@@ -658,7 +658,7 @@ func smtpRelay(envelope *Envelope) error {
 	conn.SetDeadline(time.Now().Add(DeliveryTimeout))
 	client, err := smtp.NewClient(conn, domain)
 	if err != nil {
-		return fmt.Errorf("Failed to create SMTP client: %w", err)
+		return fmt.Errorf("Failed to create SMTP client")
 	}
 	defer client.Close()
 
@@ -673,21 +673,21 @@ func smtpRelay(envelope *Envelope) error {
 	}
 
 	if err := client.Mail(RewriteFromAddress); err != nil {
-		return fmt.Errorf("MAIL FROM failed (From: %s): %w", RewriteFromAddress, err)
+		return fmt.Errorf("MAIL FROM failed")
 	}
 
 	if err := client.Rcpt(envelope.MessageTo); err != nil {
-		return fmt.Errorf("RCPT TO failed (To: %s): %w", envelope.MessageTo, err)
+		return fmt.Errorf("RCPT TO failed")
 	}
 
 	wc, err := client.Data()
 	if err != nil {
-		return fmt.Errorf("DATA command failed: %w", err)
+		return fmt.Errorf("DATA command failed")
 	}
 	defer wc.Close()
 
 	if _, err := io.Copy(wc, envelope.MessageData); err != nil {
-		return fmt.Errorf("message transfer failed: %w", err)
+		return fmt.Errorf("message transfer failed")
 	}
 	return nil
 }
@@ -712,7 +712,7 @@ func StartRelayWorkers(queue chan *Envelope, workerCount int) {
 				log.Printf("INFO: Worker %d: Processing mail.", id)
 				err := smtpRelay(env)
 				if err != nil {
-					log.Printf("ERROR: Worker %d: Failed to deliver mail: %v", id, err)
+					log.Printf("ERROR: Worker %d: Failed to deliver mail", id)
 					if env.RetryCount < 9 {
 						env.RetryCount++
 						time.Sleep(time.Duration(env.RetryCount) * 5 * time.Second)
